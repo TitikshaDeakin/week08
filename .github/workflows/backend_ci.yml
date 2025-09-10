@@ -101,8 +101,9 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Login to Azure Container Registry
-        run: az acr login --name ${{ env.ACR_NAME }}
+      - name: Docker login to ACR (using admin credentials)
+        run: echo ${{ secrets.ACR_PASSWORD }} | docker login ${{ env.ACR_LOGIN_SERVER }} -u ${{ secrets.ACR_USERNAME }} --password-stdin
+
 
       - name: Build and Push Product Service Image
         run: |
@@ -118,3 +119,4 @@ jobs:
         run: az logout
         if: always()
 # backend ci fixed Wed 10 Sep 2025 20:00:23 AEST
+# backend ci admin login Wed 10 Sep 2025 20:11:15 AEST
