@@ -144,3 +144,4 @@ jobs:
     - name: Logout from Azure
       run: az logout
       if: always()
+# trigger CI Wed 10 Sep 2025 18:27:53 AEST
