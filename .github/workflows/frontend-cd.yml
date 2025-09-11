@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       product_api_ip:
-        description: 'External URL for Product API (e.g. http://<ip>:8000)'
+        description: "External URL for Product API (e.g. http://<ip>:8000)"
         required: true
       order_api_ip:
-        description: 'External URL for Order API (e.g. http://<ip>:8001)'
+        description: "External URL for Order API (e.g. http://<ip>:8001)"
         required: true
 
 jobs:
