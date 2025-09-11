@@ -4,18 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       product_api_ip:
-        description: 'External IP of Product Service'
+        description: 'External URL for Product API (e.g. http://<ip>:8000)'
         required: true
-        default: 'http://<ip_address>:8000'
       order_api_ip:
-        description: 'External IP of Order Service'
+        description: 'External URL for Order API (e.g. http://<ip>:8001)'
         required: true
-        default: 'http://<ip_address>:8001'
 
 jobs:
   deploy_frontend:
     runs-on: ubuntu-latest
     environment: Production
+
+    # derive the registry from your ACR name secret
+    env:
+      REGISTRY: ${{ secrets.ACR_NAME }}.azurecr.io
 
     steps:
       - name: Checkout repository
@@ -28,43 +30,60 @@ jobs:
           kubectl cluster-info
 
       - name: Docker login to ACR (admin credentials)
-        run: echo "${{ secrets.ACR_PASSWORD }}" | docker login \
-          ${{ secrets.ACR_LOGIN_SERVER }} \
-          -u ${{ secrets.ACR_USERNAME }} --password-stdin
-
-
-      - name: Inject Backend IPs into Frontend main.js
         run: |
+          echo "${{ secrets.ACR_PASSWORD }}" | docker login \
+            $REGISTRY \
+            -u ${{ secrets.ACR_USERNAME }} --password-stdin
+
+      - name: Inject backend API URLs into frontend/main.js
+        run: |
+          # Replace placeholders in your frontend code
+          # Adjust the file path/placeholders if your repo differs
           sed -i "s|_PRODUCT_API_URL_|${{ inputs.product_api_ip }}|g" frontend/main.js
           sed -i "s|_ORDER_API_URL_|${{ inputs.order_api_ip }}|g" frontend/main.js
-          echo "--- Modified main.js content ---"
-          cat frontend/main.js
+          echo "--- main.js after replacement ---"
+          tail -n +1 frontend/main.js | sed -n '1,120p'
 
       - name: Build and Push Frontend Image
         run: |
-          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:latest ./frontend/
-          docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:latest
+          docker build -t $REGISTRY/frontend:latest ./frontend/
+          docker push $REGISTRY/frontend:latest
 
       - name: Deploy Frontend to AKS
         run: |
           cd k8s/
-          kubectl apply -f frontend.yaml
+          # Apply optional configs if present
+          if [ -f frontend-configmap.yaml ]; then kubectl apply -f frontend-configmap.yaml; fi
+          if [ -f frontend-secrets.yaml ]; then kubectl apply -f frontend-secrets.yaml; fi
+          # Your deployment/service manifest (adjust if your filenames differ)
+          if [ -f frontend-deployment.yaml ]; then kubectl apply -f frontend-deployment.yaml; fi
+          if [ -f frontend-service.yaml ]; then kubectl apply -f frontend-service.yaml; fi
+          # Fallback if you keep a single combined yaml
+          if [ -f frontend.yaml ]; then kubectl apply -f frontend.yaml; fi
 
       - name: Wait for Frontend LoadBalancer IP
+        shell: bash
         run: |
+          # Try the w08 lab service name; fallback to a generic name if needed
+          SVC_NAME="frontend-service-w08e1"
+          kubectl get svc "$SVC_NAME" >/dev/null 2>&1 || SVC_NAME="frontend-service"
+
           FRONTEND_IP=""
           for i in $(seq 1 60); do
-            FRONTEND_IP=$(kubectl get svc frontend-service-w08e1 -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || true)
+            FRONTEND_IP=$(kubectl get svc "$SVC_NAME" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
             if [[ -n "$FRONTEND_IP" ]]; then
               echo "Frontend Service IP: $FRONTEND_IP"
               break
             fi
             sleep 5
           done
+
           if [[ -z "$FRONTEND_IP" ]]; then
-            echo "Error: Frontend LoadBalancer IP not assigned."
+            echo "Error: Frontend LoadBalancer IP not assigned after timeout."
+            kubectl get svc "$SVC_NAME" -o wide || true
             exit 1
           fi
+
           echo "FRONTEND_IP=$FRONTEND_IP" >> $GITHUB_ENV
 
       - name: Output Frontend URL
