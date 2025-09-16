@@ -19,6 +19,7 @@ jobs:
       # 🗝️ Configure kubeconfig using GitHub Secret
       - name: Configure kubeconfig
         run: |
+          mkdir -p ~/.kube
           echo "${{ secrets.KUBECONFIG_B64 }}" | base64 --decode > ~/.kube/config
 
       - name: Verify cluster connection
