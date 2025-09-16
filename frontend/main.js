@@ -1,7 +1,7 @@
 // week08/frontend/main.js
 
-const PRODUCT_API_BASE_URL = "_PRODUCT_API_URL_";
-const ORDER_API_BASE_URL   = "_ORDER_API_URL_";
+const PRODUCT_API_BASE_URL = "http://4.237.166.140:8000";
+const ORDER_API_BASE_URL   = "http://4.254.100.97:8001";
 
 
 document.addEventListener('DOMContentLoaded', () => {
