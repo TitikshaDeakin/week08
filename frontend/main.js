@@ -1,5 +1,8 @@
 // week08/frontend/main.js
 
+const PRODUCT_API_BASE_URL = "http://product-service-w08e1:8000";
+const ORDER_API_BASE_URL = "http://order-service-w08e1:8001";
+
 document.addEventListener('DOMContentLoaded', () => {
     // API endpoints for the Product and Order services.
     // These ports (30000 for Product, 30001 for Order) are mapped
