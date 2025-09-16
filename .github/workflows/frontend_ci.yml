@@ -2,6 +2,13 @@ name: Frontend CI - Build & Push Image
 
 on:
   workflow_dispatch:
+    inputs:
+      PRODUCT_API_URL:
+        description: "Public URL for Product API (e.g., http://4.237.166.140:8000)"
+        required: true
+      ORDER_API_URL:
+        description: "Public URL for Order API (e.g., http://4.254.100.97:8001)"
+        required: true
   push:
     branches: [ main ]
     paths:
@@ -15,13 +22,43 @@ env:
 jobs:
   build_and_push_frontend:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Debug ACR login server
-        run: echo "Using ACR login server:${{ env.ACR_LOGIN_SERVER }}"
+        run: echo "Using ACR login server: ${{ env.ACR_LOGIN_SERVER }}"
+
+      - name: (Optional) Inject API URLs into main.js for manual runs
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Show the first lines for sanity
+          head -n 5 frontend/main.js || true
+
+          # Ensure placeholders exist
+          if ! grep -q "_PRODUCT_API_URL_" frontend/main.js; then
+            echo "ERROR: Placeholder _PRODUCT_API_URL_ not found in frontend/main.js"
+            exit 1
+          fi
+          if ! grep -q "_ORDER_API_URL_" frontend/main.js; then
+            echo "ERROR: Placeholder _ORDER_API_URL_ not found in frontend/main.js"
+            exit 1
+          fi
+
+          # Do the replacements
+          sed -i "s|_PRODUCT_API_URL_|${{ github.event.inputs.PRODUCT_API_URL }}|g" frontend/main.js
+          sed -i "s|_ORDER_API_URL_|${{ github.event.inputs.ORDER_API_URL }}|g" frontend/main.js
+
+          echo "Injected:"
+          echo "  PRODUCT_API_URL=${{ github.event.inputs.PRODUCT_API_URL }}"
+          echo "  ORDER_API_URL=${{ github.event.inputs.ORDER_API_URL }}"
+
+          # Show a diff summary
+          echo "--- diff preview ---"
+          grep -n "const .*_BASE_URL" frontend/main.js || true
+          echo "--------------------"
 
       - name: Docker login to ACR
         shell: bash
