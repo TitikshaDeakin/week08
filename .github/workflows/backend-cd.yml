@@ -1,10 +1,14 @@
-name: CD - Deploy Backend Services to AKS
+name: Backend CD - Deploy Backend Services to AKS
 
 on:
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["Backend CI - Test, Build and Push Images to ACR"]
+    types:
+      - completed
 
 jobs:
   deploy_backend:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: Production
     
@@ -16,7 +20,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 🗝️ Configure kubeconfig using GitHub Secret
+      # 🗝️ Configure kubeconfig using GitHub Secret (OIDC upgrade coming next)
       - name: Configure kubeconfig
         run: |
           mkdir -p ~/.kube
