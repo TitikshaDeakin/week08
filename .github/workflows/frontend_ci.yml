@@ -1,6 +1,16 @@
 name: Frontend CI - Build & Push Image
 
 on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend_ci.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend_ci.yml'
   workflow_dispatch:
     inputs:
       PRODUCT_API_URL:
@@ -9,6 +19,16 @@ on:
       ORDER_API_URL:
         description: "Public URL for Order API (e.g., http://4.254.100.97:8001)"
         required: true
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
   push:
     branches: [ main ]
     paths:
@@ -21,6 +41,7 @@ env:
 
 jobs:
   build_and_push_frontend:
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
