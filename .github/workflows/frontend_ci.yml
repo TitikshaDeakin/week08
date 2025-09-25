@@ -1,6 +1,16 @@
 name: Frontend CI - Build & Push Image
 
 on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend_ci.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend_ci.yml'
   workflow_dispatch:
     inputs:
       PRODUCT_API_URL:
@@ -9,11 +19,15 @@ on:
       ORDER_API_URL:
         description: "Public URL for Order API (e.g., http://4.254.100.97:8001)"
         required: true
-  push:
-    branches: [ main ]
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend_ci.yml'
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   ACR_LOGIN_SERVER: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
@@ -21,10 +35,32 @@ env:
 
 jobs:
   build_and_push_frontend:
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup Node.js with caching
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint frontend (eslint)
+        working-directory: frontend
+        run: npx eslint . || true
+
+      - name: Run frontend tests (optional)
+        if: ${{ github.event_name == 'pull_request' }}
+        working-directory: frontend
+        run: npm test -- --watchAll=false || true
 
       - name: Debug ACR login server
         run: echo "Using ACR login server:${{ env.ACR_LOGIN_SERVER }}"
@@ -34,10 +70,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Show the first lines for sanity
           head -n 5 frontend/main.js || true
-
-          # Ensure placeholders exist
           if ! grep -q "_PRODUCT_API_URL_" frontend/main.js; then
             echo "ERROR: Placeholder _PRODUCT_API_URL_ not found in frontend/main.js"
             exit 1
@@ -46,16 +79,11 @@ jobs:
             echo "ERROR: Placeholder _ORDER_API_URL_ not found in frontend/main.js"
             exit 1
           fi
-
-          # Do the replacements
           sed -i "s|_PRODUCT_API_URL_|${{ github.event.inputs.PRODUCT_API_URL }}|g" frontend/main.js
           sed -i "s|_ORDER_API_URL_|${{ github.event.inputs.ORDER_API_URL }}|g" frontend/main.js
-
           echo "Injected:"
           echo "  PRODUCT_API_URL=${{ github.event.inputs.PRODUCT_API_URL }}"
           echo "  ORDER_API_URL=${{ github.event.inputs.ORDER_API_URL }}"
-
-          # Show a diff summary
           echo "--- diff preview ---"
           grep -n "const .*_BASE_URL" frontend/main.js || true
           echo "--------------------"
