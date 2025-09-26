@@ -1,5 +1,3 @@
-# week08/k8s/frontend.yaml
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,23 +15,35 @@ spec:
         app: frontend
     spec:
       containers:
-      - name: frontend-container
-        image: durgeshsamariya.azurecr.io/frontend:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 80
+        - name: frontend
+          image: titikshaacr08.azurecr.io/frontend:latest
+          ports:
+            - containerPort: 80
+          env:
+            - name: ORDER_API_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: ecomm-config-w08e1     # <-- use existing ConfigMap
+                  key: ORDER_SERVICE_URL       # <-- map to existing key
+            - name: PRODUCT_API_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: ecomm-config-w08e1
+                  key: PRODUCT_SERVICE_URL
+      imagePullSecrets:
+        - name: acr-creds
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: frontend-w08e1 # Service name matches
+  name: frontend-w08e1
   labels:
     app: frontend
 spec:
+  type: LoadBalancer
   selector:
     app: frontend
   ports:
     - protocol: TCP
-      port: 80 # The port the service listens on inside the cluster
-      targetPort: 80 # The port on the Pod (containerPort where Nginx runs)
-  type: LoadBalancer # Exposes the service on a port on each Node's IP
+      port: 80
+      targetPort: 80
