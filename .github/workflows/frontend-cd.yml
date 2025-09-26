@@ -1,12 +1,7 @@
 name: Frontend CD - Deploy Frontend to AKS
 
 on:
-  # Auto-trigger after Frontend CI succeeds
-  workflow_run:
-    workflows: ["Frontend CI - Build & Push Image"]
-    types: [completed]
-
-  # Still allow manual runs from the Actions UI
+  # Manual run from the Actions UI
   workflow_dispatch: {}
 
 permissions:
@@ -15,11 +10,10 @@ permissions:
 
 jobs:
   deploy_frontend:
-    # Run if (a) started manually OR (b) Frontend CI concluded success
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
-    # Production safeguard (configure required reviewers in Settings → Environments)
+    # Production safeguard: configure required reviewers in
+    # GitHub → Repo Settings → Environments → Production
     environment:
       name: Production
 
@@ -27,7 +21,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Use kubeconfig secret if present; otherwise we skip cluster work but keep run green
+      # Use kubeconfig secret if present; otherwise skip cluster work but keep run green
       - name: Configure kubeconfig (if secret present)
         id: kubeconf
         shell: bash
@@ -58,7 +52,7 @@ jobs:
           fi
           exit 0
 
-      # Deploy (single file or split files) only when the cluster is reachable
+      # --- Apply manifests (support single or split files) ---
       - name: Deploy Frontend (single manifest)
         if: ${{ steps.ping.outputs.reachable == 'true' && hashFiles('k8s/frontend.yaml') != '' }}
         run: |
@@ -72,24 +66,37 @@ jobs:
           if [ -f k8s/frontend-deployment.yaml ]; then kubectl apply -f k8s/frontend-deployment.yaml; fi
           if [ -f k8s/frontend-service.yaml ]; then kubectl apply -f k8s/frontend-service.yaml; fi
 
-      # Health check: fail fast if rollout doesn't stabilize
+      # --- Rollout health check (adjust deployment name if yours differs) ---
       - name: Validate frontend rollout
         if: ${{ steps.ping.outputs.reachable == 'true' }}
         run: |
           set -euo pipefail
-          # adjust name if your Deployment differs
-          kubectl rollout status deployment/frontend --timeout=120s
+          # Try common names; succeed if any validates
+          set +e
+          kubectl rollout status deployment/frontend --timeout=120s && exit 0
+          kubectl rollout status deployment/frontend-deployment --timeout=120s && exit 0
+          # If neither name exists/succeeds, show helpful info and fail
+          set -e
+          echo "Could not validate rollout: check your Deployment name."
+          echo "Deployments in cluster:"
+          kubectl get deploy -A
+          exit 1
 
-      # Optional: show service IP (nice for screenshots)
+      # --- Capture service external IP for evidence (adjust service name if needed) ---
       - name: Capture frontend service IP
         id: fip
         if: ${{ steps.ping.outputs.reachable == 'true' }}
         shell: bash
         run: |
-          # adjust service name if needed
-          FRONTEND_IP=$(kubectl get svc frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+          # Try common service names in default namespace
+          FRONTEND_IP=""
+          FRONTEND_IP=$(kubectl get svc frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null) || true
+          if [[ -z "$FRONTEND_IP" ]]; then
+            FRONTEND_IP=$(kubectl get svc frontend-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null) || true
+          fi
           echo "ip=${FRONTEND_IP}" >> "$GITHUB_OUTPUT"
 
+      # --- Friendly job summaries for screenshots ---
       - name: Job summary (cluster reachable)
         if: ${{ steps.ping.outputs.reachable == 'true' }}
         run: |
