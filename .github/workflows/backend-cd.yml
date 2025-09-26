@@ -1,9 +1,13 @@
 name: Backend CD - Deploy Backend Services to AKS
 
 on:
+  # Auto-run after Backend CI completes (kept)
   workflow_run:
     workflows: ["Backend CI - Test, Build and Push Images to ACR"]
     types: [completed]
+
+  # NEW: allow running CD independently from the Actions UI
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -11,15 +15,17 @@ permissions:
 
 jobs:
   deploy_backend:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Allow if: (a) CI succeeded OR (b) this was started manually
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    environment: Production
+    environment:
+      name: Production
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- Kubeconfig setup (kept for compatibility; OIDC upgrade is a later fix) ---
+      # --- Kubeconfig setup (still using secret; OIDC would be a later fix) ---
       - name: Configure kubeconfig (if secret present)
         id: kubeconf
         shell: bash
@@ -32,9 +38,8 @@ jobs:
           else
             echo "No kubeconfig secret found; will skip cluster actions."
             echo "configured=false" >> "$GITHUB_OUTPUT"
-          fi
 
-      # --- Probe cluster connectivity (don’t fail the job if cluster doesn’t exist) ---
+      # --- Probe cluster connectivity (non-fatal) ---
       - name: Verify cluster connection (non-fatal)
         id: ping
         shell: bash
@@ -70,7 +75,7 @@ jobs:
           kubectl apply -f k8s/product-service.yaml
           kubectl apply -f k8s/order-service.yaml
 
-      # --- Rollout validation (hard fail if rollout doesn’t stabilize) ---
+      # --- Rollout validation (only when cluster reachable) ---
       - name: Validate rollouts
         if: ${{ steps.ping.outputs.reachable == 'true' }}
         run: |
@@ -78,7 +83,7 @@ jobs:
           kubectl rollout status deployment/product-service --timeout=120s
           kubectl rollout status deployment/order-service  --timeout=120s
 
-      # --- Capture external IPs into the summary for easy debugging ---
+      # --- Capture external IPs and write a summary ---
       - name: Capture service external IPs
         id: ips
         if: ${{ steps.ping.outputs.reachable == 'true' }}
@@ -89,7 +94,7 @@ jobs:
           echo "product_ip=${PRODUCT_IP}" >> "$GITHUB_OUTPUT"
           echo "order_ip=${ORDER_IP}"   >> "$GITHUB_OUTPUT"
 
-      - name: Job summary
+      - name: Job summary (cluster reachable)
         if: ${{ steps.ping.outputs.reachable == 'true' }}
         run: |
           {
@@ -98,16 +103,17 @@ jobs:
             echo "- Product Service IP: **${{ steps.ips.outputs.product_ip || 'pending' }}**"
             echo "- Order Service IP: **${{ steps.ips.outputs.order_ip   || 'pending' }}**"
             echo ""
-            echo "_Rollout validated via \`kubectl rollout status\`._"
+            echo "_Triggered by: **${{ github.event_name }}** (manual runs allowed via workflow_dispatch)._"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # --- Graceful summary when cluster is not reachable (keeps run green) ---
       - name: Job summary (no cluster)
         if: ${{ steps.ping.outputs.reachable != 'true' }}
         run: |
           {
             echo "## Backend CD Summary"
             echo ""
-            echo "> Skipped cluster actions because no kubeconfig/cluster was available."
-            echo "> (Resources were intentionally cleaned up for this assignment.)"
+            echo "> Skipped cluster actions (no kubeconfig/cluster)."
+            echo "> This is expected since Azure resources were removed for the assignment."
+            echo ""
+            echo "_Triggered by: **${{ github.event_name }}** (manual runs allowed via workflow_dispatch)._"
           } >> "$GITHUB_STEP_SUMMARY"
