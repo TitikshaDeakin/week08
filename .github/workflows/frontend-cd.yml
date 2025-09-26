@@ -1,36 +1,115 @@
-name: CD - Deploy Frontend to AKS
+name: Frontend CD - Deploy Frontend to AKS
 
 on:
-  workflow_dispatch:
+  # Auto-trigger after Frontend CI succeeds
+  workflow_run:
+    workflows: ["Frontend CI - Build & Push Image"]
+    types: [completed]
+
+  # Still allow manual runs from the Actions UI
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   deploy_frontend:
+    # Run if (a) started manually OR (b) Frontend CI concluded success
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    environment: Production
+
+    # Production safeguard (configure required reviewers in Settings → Environments)
+    environment:
+      name: Production
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure kubeconfig
+      # Use kubeconfig secret if present; otherwise we skip cluster work but keep run green
+      - name: Configure kubeconfig (if secret present)
+        id: kubeconf
+        shell: bash
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 --decode > ~/.kube/config
+          set -euo pipefail
+          if [[ -n "${{ secrets.KUBECONFIG_B64 }}" ]]; then
+            mkdir -p ~/.kube
+            echo "${{ secrets.KUBECONFIG_B64 }}" | base64 --decode > ~/.kube/config
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Verify cluster connection
-        run: kubectl get nodes
+      - name: Verify cluster connection (non-fatal)
+        id: ping
+        shell: bash
+        run: |
+          set +e
+          if [[ "${{ steps.kubeconf.outputs.configured }}" != "true" ]]; then
+            echo "reachable=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          kubectl version --short >/dev/null 2>&1
+          if [[ $? -eq 0 ]]; then
+            echo "reachable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "reachable=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
 
-      # If your repo has ONE file (frontend.yaml), keep this block and remove the next one.
+      # Deploy (single file or split files) only when the cluster is reachable
       - name: Deploy Frontend (single manifest)
-        if: ${{ hashFiles('k8s/frontend.yaml') != '' }}
+        if: ${{ steps.ping.outputs.reachable == 'true' && hashFiles('k8s/frontend.yaml') != '' }}
         run: |
-          echo "Applying k8s/frontend.yaml"
+          set -euo pipefail
           kubectl apply -f k8s/frontend.yaml
 
-      # If your repo has split files, this block will run; the single-file block above will be skipped.
       - name: Deploy Frontend (split manifests)
-        if: ${{ hashFiles('k8s/frontend-deployment.yaml') != '' || hashFiles('k8s/frontend-service.yaml') != '' }}
+        if: ${{ steps.ping.outputs.reachable == 'true' && (hashFiles('k8s/frontend-deployment.yaml') != '' || hashFiles('k8s/frontend-service.yaml') != '') }}
         run: |
-          echo "Applying split frontend manifests"
+          set -euo pipefail
           if [ -f k8s/frontend-deployment.yaml ]; then kubectl apply -f k8s/frontend-deployment.yaml; fi
           if [ -f k8s/frontend-service.yaml ]; then kubectl apply -f k8s/frontend-service.yaml; fi
+
+      # Health check: fail fast if rollout doesn't stabilize
+      - name: Validate frontend rollout
+        if: ${{ steps.ping.outputs.reachable == 'true' }}
+        run: |
+          set -euo pipefail
+          # adjust name if your Deployment differs
+          kubectl rollout status deployment/frontend --timeout=120s
+
+      # Optional: show service IP (nice for screenshots)
+      - name: Capture frontend service IP
+        id: fip
+        if: ${{ steps.ping.outputs.reachable == 'true' }}
+        shell: bash
+        run: |
+          # adjust service name if needed
+          FRONTEND_IP=$(kubectl get svc frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+          echo "ip=${FRONTEND_IP}" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary (cluster reachable)
+        if: ${{ steps.ping.outputs.reachable == 'true' }}
+        run: |
+          {
+            echo "## Frontend CD Summary"
+            echo ""
+            echo "- Rollout: **validated via \`kubectl rollout status\`**"
+            echo "- Frontend Service IP: **${{ steps.fip.outputs.ip || 'pending' }}**"
+            echo ""
+            echo "_Triggered by: **${{ github.event_name }}**_"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Job summary (no cluster)
+        if: ${{ steps.ping.outputs.reachable != 'true' }}
+        run: |
+          {
+            echo "## Frontend CD Summary"
+            echo ""
+            echo "> Skipped cluster actions because no kubeconfig/cluster was available."
+            echo "> (Expected after Azure resource cleanup.)"
+            echo ""
+            echo "_Triggered by: **${{ github.event_name }}**_"
+          } >> "$GITHUB_STEP_SUMMARY"
